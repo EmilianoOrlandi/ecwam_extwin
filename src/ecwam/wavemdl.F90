@@ -589,7 +589,7 @@ SUBROUTINE WAVEMDL (CBEGDAT, PSTEP, KSTOP, KSTPW, LLWAVEINIT_ONLY,&
 !          -------------------------------------------
 
       IF (LWCOU) THEN
-        CALL CHKOOPS(LDUPDATEOOPS=.TRUE.)
+        CALL CHKOOPS(LDUPDATEOOPS=.FALSE.)
       ENDIF
 
       CALL SETMARSTYPE
