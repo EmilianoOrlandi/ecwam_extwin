@@ -76,8 +76,8 @@
       USE YOWFPBO  , ONLY : IBOUNF
       USE YOWFRED  , ONLY : IFRE1, FR1, XKMSS_CUTOFF 
       USE YOWGRIBHD, ONLY : NGRIB_VERSION, LGRHDIFS,                    &
-     &                      LNEWLVTP, LL_GRID_SIMPLE_MATRIX
-      USE YOWGRIB_HANDLES , ONLY : NGRIB_HANDLE_IFS
+     &                      LNEWLVTP, LL_GRID_SIMPLE_MATRIX, LLRSTGRIBPARAM
+      USE YOWGRIB_HANDLES , ONLY : NGRIB_HANDLE_IFS, NGRIB_HANDLE_IFS2
       USE YOWGRID  , ONLY : NPROMA_WAM
       USE YOWICE   , ONLY : LICERUN  ,LMASKICE ,LWAMRSETCI, LCIWABR  ,  &
      &            LICETH
@@ -87,6 +87,7 @@
       USE YOWPARAM , ONLY : NANG     ,NFRE     ,NFRE_RED ,              &
      &            SWAMPWIND,SWAMPWIND2,DTNEWWIND,LTURN90 ,              &
      &            SWAMPCIFR,SWAMPCITH,LWDINTS  ,LL1D     ,LLUNSTR
+      USE YOWPCONS , ONLY : ROAIR    ,ROWATER  ,GAM_SURF
       USE YOWPHYS  , ONLY : BETAMAX  ,ZALP     ,ALPHA    ,  ALPHAPMAX,  &
      &            TAUWSHELTER, TAILFACTOR, TAILFACTOR_PM
 
@@ -224,6 +225,7 @@
      &   LSMSSIG_WAM,CMETER,CEVENT,                                     &
      &   LLWSWAVE, LLWDWAVE,                                            &
      &   NPROMA_WAM, LL1D, LGRHDIFS , LNEWLVTP, LL_GRID_SIMPLE_MATRIX,  &
+     &   LLRSTGRIBPARAM,                                                &
      &   LWCOUNORMS, LLNORMIFS2WAM, LLNORMWAM2IFS, LLNORMWAMOUT,        &
      &   LLNORMWAMOUT_GLOBAL, CNORMWAMOUT_FILE,                         &
      &   LICERUN, LCIWABR, LICETH,                                      &
@@ -235,7 +237,8 @@
      &   LWNEMOCOUDEBUG,                                                &
      &   LLCAPCHNK, LLGCBZ0, LLNORMAGAM,                                &
      &   LWAM_USE_IO_SERV,                                              &
-     &   LOUTMDLDCP
+     &   LOUTMDLDCP,                                                    &
+     &   ROAIR, ROWATER, GAM_SURF
 
 
       CHARACTER(LEN=14) :: CLOUT
@@ -481,6 +484,9 @@
 !     LSMSSIG_WAM : .T. = send signals to ECFLOW (ECMWF supervisor)
 !     CMETER :  SMS or ECFLOW meter command (ECMWF supervisor)
 !     CEVENT :  SMS or ECFLOW event command (ECMWF supervisor)
+!     ROAIR : DEFAULT VALUES FOR AIR DENSITY (kg m**-3)
+!     ROWATER : DEFAULT VALUES FOR WATER DENSITY (kg m**-3)
+!     GAM_SURF : DEFAUT VALUE FOR WATER SURFACE TENSION (in N/m)
 
 
 !     NAMELIST NAOT : 
@@ -712,11 +718,13 @@
 
       LGRHDIFS = .FALSE.
 
-      NGRIB_VERSION = 1
+      NGRIB_VERSION = 2
 
       LNEWLVTP = .FALSE.
 
       LL_GRID_SIMPLE_MATRIX = .TRUE.
+
+      LLRSTGRIBPARAM = .FALSE.
 
       LBIWBK = .TRUE.
 
@@ -760,7 +768,11 @@
       LBCWA = .FALSE.
 
       NGRIB_HANDLE_IFS = -1
+      NGRIB_HANDLE_IFS2 = -1
 
+      ROAIR = 1.225_JWRB
+      ROWATER = 1000.0_JWRB
+      GAM_SURF = 0.0717_JWRB
 
 ! ----------------------------------------------------------------------
 
@@ -993,6 +1005,7 @@
 !     Most of the namelist selection will be written to the logfiles in userin.
 
 !     Some are printed below
+!$acc update device(NFRE_RED)
 
       IF (IRANK == 1) THEN
         WRITE(6,*) '==============================================='
@@ -1038,6 +1051,9 @@
         WRITE(6,*) '*** YEXPVER = ',YEXPVER
         WRITE(6,*) '*** YCLASS = ',YCLASS
         WRITE(6,*) '*** ISTREAM = ',ISTREAM
+        WRITE(6,*) '*** ROAIR = ',ROAIR
+        WRITE(6,*) '*** ROWATER = ',ROWATER
+        WRITE(6,*) '*** GAM_SURF = ',GAM_SURF
         IF (NGOUT > 0) THEN
           WRITE (6,*) " OUTPUT POINTS FOR SPECTRA AS DEFINED BY USER INPUT    NO.    LAT.   LONG. "
           DO IC=1,NGOUT

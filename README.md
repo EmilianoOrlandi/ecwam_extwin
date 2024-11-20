@@ -41,20 +41,17 @@ Requirements
 - fiat (see https://github.com/ecmwf-ifs/fiat)
 - eccodes (see https://github.com/ecmwf/eccodes)
 - field_api (see https://github.com/ecmwf-ifs/field_api)
+- Python with pyyaml + [fypp](https://github.com/aradi/fypp) or fckit (see https://github.com/ecmwf/fckit)
 
 Further optional dependencies:
 - MPI Fortran libraries
 - multio (see https://github.com/ecmwf/multio)
 - ocean model (e.g. NEMO or FESOM)
-- fypp (see https://github.com/aradi/fypp)
+- loki (see https://github.com/ecmwf-ifs/loki)
 
 Some driver scripts to run tests and validate results rely on availability of:
 - md5sum (part of GNU Coreutils; on MacOS, install with `brew install coreutils`)
-- Python with pyyaml package
-
-Generating the derived-type data structures (read end of next section) requires:
-- Python with pyyaml package
-- fypp
+- Python with pyyaml or fckit
 
 Building ecWAM
 --------------
@@ -66,6 +63,7 @@ Environment variables
     $ export fiat_ROOT=<path-to-fiat>
     $ export eccodes_ROOT=<path-to-eccodes>
     $ export field_api_ROOT=<path-to-field_api>
+    $ export fckit_ROOT=<path-to-fckit> (optional)
     $ export CC=<path-to-C-compiler>
     $ export FC=<path-to-Fortran-compiler>
     $ export CXX=<path-to-C++-compiler>
@@ -106,7 +104,7 @@ Optionally, tests can be run to check succesful compilation, when the feature TE
     $ ctest
 
 ### Generate derived-types data structures
-The derived-types storing grid-point data in ecWam can be configured in `src/ecwam/yowfield_mod_config.yaml`. If the fypp preprocessor and Python + pyyaml are found, then the configuration file is used to expand the accompanying `src/ecwam/yowfield_mod.fypp` into Fortran derived-type objects. The glue-code required to turn the derived-types members into FIELD API objects is also generated. If fypp and pyyaml are not found, then the existing `src/ecwam/yowfield_mod.F90` is used. Generation of the derived-type data structures can be disabled by passing the following build time option: `-DENABLE_GEN_DERIV_TYPES=OFF`.
+The derived-types storing grid-point data in ecWam can be configured in `src/ecwam/yowfield_mod_config.yaml`, which is used to expand the accompanying `src/ecwam/yowfield_mod.fypp` into Fortran derived-type objects. The glue-code required to turn the derived-types members into FIELD API objects is also generated.
 
 ## Build using ecWAM bundle
 
@@ -216,6 +214,45 @@ there are following options:
 
 Note that only `ecwam-run-model` currently supports MPI.
 
+
+GPU offload
+===========
+ecWAM can be offloaded for GPU execution. GPU optimised code for the wave propagation kernel is commited to source,
+whereas GPU code for the source-term computation is generated at build-time build-time using ECMWF's source-to-source
+translation toolchain Loki. Currently, three Loki transformations are supported:
+- Single-column-coalesced (scc): Fuse vector loops and promote to the outermost level to target the SIMT execution model
+- scc-hoist: The scc transformation with temporary arrays hoisted to the driver-layer (the default)
+- scc-stack: The scc transformation with a pool allocator used to allocate temporary arrays
+
+The scc-hoist and scc-stack transformations offer superior performance to the scc transformation. Currently, only the
+OpenACC programming model on Nvidia GPUs is supported.
+
+NB: GPU offload is not yet supported for ecWAM 1.4.x.
+
+Building
+--------
+The recommended option for building the GPU enabled ecWAM is to use the provided bundle, and pass the
+`--with-loki --with-acc` options. Different Loki transformations can also be chosen at build-time via the following 
+bundle option: `--loki-mode=<trafo>`. Direct GPU-to-GPU MPI communications can be enabled by passing the 
+`--with-gpu-aware-mpi` option.
+
+The ecwam-bundle also provides appropriate arch files for the nvhpc suite on the ECMWF ATOS system.
+
+Running
+-------
+No extra run-time options are needed to run the GPU enabled ecWam. Please note that this means that if ecWam is built
+using the `--with-loki` and `--with-acc` bundle arguments, it will necessarily be offloaded for GPU execution.
+For multi-GPU runs, the number of GPUs maps to the number of MPI ranks. Thus multiple GPUs can be requested by
+launching with multiple MPI ranks. The mapping of MPI ranks to GPUs assumes at most 4 GPUs per host node.
+
+Environment variables
+---------------------
+
+The Loki SCC transformation uses the CUDA runtime to manage temporary arrays and needs a large
+ `NV_ACC_CUDA_HEAPSIZE`, e.g. `NV_ACC_CUDA_HEAPSIZE=4G`.
+
+For running with multiple OpenMP threads and grids finer than `O48`, `OMP_STACKSIZE` should be set to at least `256M`.
+
 Known issues
 ============
 
@@ -225,7 +262,7 @@ Known issues
    a floating point exception during during call to `MPI_INIT`.
    The flag `-ffpe-trap=overflow` is set e.g. for `Debug` build type.
    Floating point exceptions on arm64 manifest as a `SIGILL`.
-
+2) The coarsest configuration, i.e. `O48`, should be run with no more than one GPU.
 
 Reporting Bugs
 ==============

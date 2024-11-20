@@ -27,13 +27,14 @@ REAL(KIND=JWRB) FUNCTION TRANSF(XK,D)
       USE PARKIND_WAVE, ONLY : JWIM, JWRB, JWRU
 
       USE YOWPCONS , ONLY : G     ,DKMAX
+      USE YOWSHAL  , ONLY : BATHYMAX
 
 !----------------------------------------------------------------------
  
       IMPLICIT NONE
 
       REAL(KIND=JWRB), INTENT(IN) :: XK,D
-
+!$loki routine seq
       REAL(KIND=JWRB) :: EPS,X,T_0,OM,C_0,V_G,DV_G,XNL_1,XNL_2,XNL
 
       EPS=0.0001_JWRB
@@ -41,7 +42,7 @@ REAL(KIND=JWRB) FUNCTION TRANSF(XK,D)
 !*    1. DETERMINE TRANSFER FUNCTION.
 !     ------------------------------
 !     
-      IF ( D < 999.0_JWRB .AND. D > 0.0_JWRB) THEN
+      IF ( D < BATHYMAX .AND. D > 0.0_JWRB ) THEN
         X   = XK*D
         IF ( X > DKMAX) THEN
           TRANSF = 1.0_JWRB 

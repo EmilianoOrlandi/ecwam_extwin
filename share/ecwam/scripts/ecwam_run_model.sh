@@ -40,7 +40,7 @@ output_fields=$(read_config output.fields.name[:] --default="")
 output_statistics=$(read_config output.statistics.name[:] --default="")
 
 output_parameters_index=""
-[[ -z "${output_fields}" ]] || output_parameters_index=$(${SCRIPTS_DIR}/ecwam_parameters.py --request=index ${output_fields})
+[[ -z "${output_fields}" ]] || output_parameters_index=$(${ECWAM_PYTHON_INTERP} ${SCRIPTS_DIR}/ecwam_parameters.py --request=index ${output_fields})
 
 OUTPUT_FLAGS=""
 if [ $(read_config output.fields.format --default=grib) = grib ] ; then
@@ -56,7 +56,7 @@ else
 fi
 
 output_parameters_index=""
-[[ -z "${output_statistics}" ]] || output_parameters_index=$(${SCRIPTS_DIR}/ecwam_parameters.py --request=index ${output_statistics})
+[[ -z "${output_statistics}" ]] || output_parameters_index=$(${ECWAM_PYTHON_INTERP} ${SCRIPTS_DIR}/ecwam_parameters.py --request=index ${output_statistics})
 for index in ${output_parameters_index}; do
     [[ -z "${OUTPUT_FLAGS}" ]] || OUTPUT_FLAGS+=$'\n  '
     OUTPUT_FLAGS+="NFLAG(${index})=T,"
@@ -84,6 +84,7 @@ wamnfre=$(read_config frequencies)
 nproma=$(read_config nproma --default=24)
 iphys=$(read_config iphys --default=1)
 llgcbz0=$(read_config llgcbz0 --default=F)
+llnormagam=$(read_config llnormagam --default=F)
 
 # read timesteps
 phys_tstp=$(read_config physics.timestep --format=seconds --default=900)
@@ -224,7 +225,7 @@ cat > wam_namelist << EOF
   LBIWBK                = T,
   LLCAPCHNK             = T,
   LLGCBZ0               = ${llgcbz0},
-  LLNORMAGAM            = F,
+  LLNORMAGAM            = ${llnormagam},
   IPROPAGS              = 2,
   LSUBGRID              = F,
   IREFRA                = 0,
@@ -233,6 +234,7 @@ cat > wam_namelist << EOF
   LWAMRSETCI            = T,
   NGRIB_VERSION         = 2,
   LL_GRID_SIMPLE_MATRIX = F,
+  LLRSTGRIBPARAM        = F,
   YCLASS                = "rd",
   YEXPVER               = "wave",
   ISTREAM               = 1045,
@@ -315,8 +317,8 @@ if [ "$(read_config validation.${precision}_precision --default=NOTFOUND)" != NO
   echo "*******************************************************************************"
   mkdir -p ${RUN_DIR}/logs/model
   cp statistics.log ${RUN_DIR}/logs/model/statistics.log
-  echo " + ${SCRIPTS_DIR}/ecwam_validation.py ${RUN_DIR}/config.yml ${RUN_DIR}/logs/model/statistics.log --section=validation.${precision}_precision"
-  log ${SCRIPTS_DIR}/ecwam_validation.py ${RUN_DIR}/config.yml ${RUN_DIR}/logs/model/statistics.log --section=validation.${precision}_precision || {
+  echo " + ${ECWAM_PYTHON_INTERP} ${SCRIPTS_DIR}/ecwam_validation.py ${RUN_DIR}/config.yml ${RUN_DIR}/logs/model/statistics.log --section=validation.${precision}_precision"
+  log ${ECWAM_PYTHON_INTERP} ${SCRIPTS_DIR}/ecwam_validation.py ${RUN_DIR}/config.yml ${RUN_DIR}/logs/model/statistics.log --section=validation.${precision}_precision || {
     cleanup
     exit 1
   }
