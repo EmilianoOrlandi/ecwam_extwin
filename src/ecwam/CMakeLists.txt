@@ -82,6 +82,8 @@ list( APPEND ecwam_srcs
   frcutindex.F90
   gc_dispersion.h
   get_preset_wgrib_template.F90
+  getbobstrct.F90
+  getgrbobstrct.F90
   getcurr.F90
   getfrstwnd.F90
   getspec.F90
@@ -116,6 +118,7 @@ list( APPEND ecwam_srcs
   jonswap.F90
   kerkei.F90
   kgribsize.F90
+  ktoobs.F90
   kurtosis.F90
   kzeone.F90
   makegrid.F90
@@ -269,6 +272,7 @@ list( APPEND ecwam_srcs
   w_mode_st.F90
   w_pdf.F90
   w_pmax.F90
+  wam_init_gpu_mod.F90
   wam_multio_mod.F90
   wam_nproma.F90
   wam_sorti.F90
@@ -285,6 +289,7 @@ list( APPEND ecwam_srcs
   wdirspread.F90
   weflux.F90
   wgrib2fdb.F90
+  wgrib_edition.F90
   wgribencode.F90
   wgribencode_model.F90
   wgribenout.F90
@@ -298,8 +303,11 @@ list( APPEND ecwam_srcs
   wsmfen.F90
   wstream_strg.F90
   wvalloc.F90
+  wvchkmid.F90
   wvdealloc.F90
   wvfricvelo.F90
+  wvopenbathy.F90
+  wvopensubbathy.F90
   wvwamdecomp.F90
   wvwaminit.F90
   wvwaminit1.F90
@@ -322,6 +330,7 @@ list( APPEND ecwam_srcs
   yowgrib.F90
   yowgrib_handles.F90
   yowgribhd.F90
+  yowgribinfo.F90
   yowgrid.F90
   yowgstats.F90
   yowice.F90
@@ -356,18 +365,26 @@ list( APPEND ecwam_srcs
   z0wave.F90
 )
 
-if( HAVE_GEN_DERIV_TYPES )
-   list( APPEND ecwam_srcs ${CMAKE_CURRENT_BINARY_DIR}/yowfield_mod.F90)
-   add_custom_command(
-       OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/yowfield_mod.F90
-       COMMAND ${FYPP} -m io -m yaml -m os ${CMAKE_CURRENT_SOURCE_DIR}/yowfield_mod.fypp > yowfield_mod.F90
-       DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/yowfield_mod.fypp
-       VERBATIM)
-else()
-   list( APPEND ecwam_srcs yowfield_mod.F90)
+# Loki GPU transformations must use the alternate driver-layer with the FIELD_API
+# offload instructions
+if(HAVE_LOKI AND NOT LOKI_MODE MATCHES "idem|idem-stack")
+  list(APPEND ecwam_srcs wamintgr_loki_gpu.F90)
+  list(REMOVE_ITEM ecwam_srcs wamintgr.F90)
 endif()
 
+list( APPEND ecwam_srcs ${CMAKE_CURRENT_BINARY_DIR}/yowfield_mod.F90)
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/yowfield_mod.F90
+    COMMAND ${FYPP} -m io -M ${CMAKE_CURRENT_SOURCE_DIR}/../../share/ecwam/scripts -m ecwam_yaml_reader -m os
+    ${CMAKE_CURRENT_SOURCE_DIR}/yowfield_mod.fypp > yowfield_mod.F90
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/yowfield_mod.fypp
+    VERBATIM)
+
 unset( MPI_Fortran_LIBRARIES )
+if( HAVE_GPU_AWARE_MPI )
+  set( MPI_Fortran_LIBRARIES MPI::MPI_Fortran )
+endif()
+
 if( HAVE_UNWAM )
   list(APPEND ecwam_srcs ${unwam_srcs})
   list(APPEND ECWAM_DEFINITIONS WAM_HAVE_UNWAM)
@@ -407,7 +424,7 @@ endif()
 set( ${PNAME}_OCEANMODEL_LIBRARIES "" )
 if( HAVE_OCEAN_COUPLING )
   list(APPEND ECWAM_DEFINITIONS WITH_NEMO )
-  if( ${PNAME}_OCEANMODEL_HAVE_SINGLE_PRECISION )
+  if( ${OCEAN_PREC} STREQUAL SP )
     list(APPEND ECWAM_DEFINITIONS PARKIND1_SINGLE_NEMO )
   endif()
   set( ${PNAME}_OCEANMODEL_LIBRARIES nemogcmcoup.${OCEAN_PREC} )
@@ -417,8 +434,24 @@ if( HAVE_ECFLOW )
   list(APPEND ECWAM_PRIVATE_DEFINITIONS WAM_HAVE_ECFLOW)
 endif()
 
+if( HAVE_GPU_AWARE_MPI )
+  list(APPEND ECWAM_DEFINITIONS WITH_GPU_AWARE_MPI )
+endif()
+
+if( HAVE_SINGLE_PRECISION )
+  list(APPEND ECWAM_DEFINITIONS WAM_HAVE_SINGLE_PRECISION )
+endif()
+
+# Using dynamic linking creates undefined references to the device
+# copies of module global variables
+set( LIBRARY_TYPE SHARED )
+if( HAVE_ACC )
+  set( LIBRARY_TYPE STATIC )
+endif()
+
 ecbuild_add_library(
     TARGET           ${ecwam}
+    TYPE             ${LIBRARY_TYPE}
     SOURCES          ${ecwam_srcs}
     PUBLIC_LIBS      fiat parkind_${prec} ${ecwam}_intfb
                      ${MPI_Fortran_LIBRARIES}
@@ -428,7 +461,9 @@ ecbuild_add_library(
                      ${OpenMP_Fortran_LIBRARIES}
                      field_api_${prec}
                      $<${HAVE_ECFLOW}:ecflow_lightf>
+                     $<${HAVE_ACC}:OpenACC::OpenACC_Fortran>
     PUBLIC_INCLUDES  $<INSTALL_INTERFACE:include>
+    PRIVATE_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE_DEFINITIONS ${ECWAM_PRIVATE_DEFINITIONS}
     PUBLIC_DEFINITIONS ${ECWAM_DEFINITIONS}
 )
@@ -438,6 +473,10 @@ ecwam_target_fortran_module_directory(
     MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/module/${ecwam}
     INSTALL_DIRECTORY module/${ecwam}
 )
+
+if( HAVE_ACC )
+   target_compile_options( ${ecwam} PRIVATE "-gpu=maxregcount:128" )
+endif()
 
 ecwam_target_compile_definitions_FILENAME( ${ecwam} )
 
@@ -455,6 +494,7 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "PGI|NVHPC" AND CMAKE_BUILD_TYPE MATCHE
   set_source_files_properties(
       sbottom.F90 PROPERTIES COMPILE_FLAGS " -g -O1 -Mflushz -Mno-signed-zeros "
   )
+  set_source_files_properties( mubuf.F90 PROPERTIES COMPILE_OPTIONS "-Mnofma" )
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "PGI|NVHPC" AND CMAKE_BUILD_TYPE MATCHES "Debug")
   string(REPLACE "-Ktrap=fp" "" ${PNAME}_Fortran_FLAGS_DEBUG ${${PNAME}_Fortran_FLAGS_DEBUG})
   set_source_files_properties( outbeta.F90 PROPERTIES COMPILE_OPTIONS "${${PNAME}_Fortran_FLAGS_DEBUG} -Ktrap=divz")
@@ -467,4 +507,34 @@ endif()
 
 if( CMAKE_Fortran_COMPILER_ID MATCHES Intel AND HAVE_SINGLE_PRECISION )
   set_source_files_properties( grib2wgrid.F90 PROPERTIES COMPILE_OPTIONS "-fp-model;strict" )
+endif()
+
+if( HAVE_LOKI )
+
+  set( LOKI_FRONTEND "fp" CACHE STRING "Frontend parser for Loki source transformations" )
+  set( SCC_ARGS "")
+
+  if( LOKI_MODE MATCHES "idem|idem-stack" )
+     set( LOKI_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/ecwam_loki.config )
+  else()
+     set( LOKI_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/ecwam_loki_gpu.config )
+     target_compile_definitions( ${ecwam} PRIVATE WAM_GPU )
+     set( SCC_ARGS "TRIM_VECTOR_SECTIONS;GLOBAL_VAR_OFFLOAD")
+  endif()
+
+  # Apply Loki source file transformation to lib target
+  loki_transform_target( TARGET ${ecwam}
+    MODE ${LOKI_MODE}
+    DIRECTIVE openacc
+    FRONTEND ${LOKI_FRONTEND}
+    CONFIG ${LOKI_CONFIG_FILE}
+    PLAN ${CMAKE_CURRENT_BINARY_DIR}/loki_plan_ecwam.cmake
+    ${SCC_ARGS}
+    CPP
+    DEFINITIONS WAM_GPU
+    INCLUDES ${ecwam_intfb_includes}
+    SOURCES
+      ${CMAKE_CURRENT_SOURCE_DIR}/
+  )
+
 endif()

@@ -102,7 +102,7 @@
       USE YOWMPP   , ONLY : IRANK    ,NPROC
       USE YOWSTAT  , ONLY : CDATEE   ,CDTPRO                       ,    &
      &            IPROPAGS ,LSUBGRID ,IREFRA   ,IDELPRO, TIME_PHYS,     &
-     &            TIME_PROPAG
+     &            TIME_PROPAG, TIME_OFFLOAD
       USE YOWWAMI  , ONLY : CBPLTDT  ,CEPLTDT
       USE YOWALTAS , ONLY : LODBRALT
       USE MPL_MODULE, ONLY : MPL_INIT, MPL_END, MPL_COMM
@@ -112,7 +112,6 @@
       USE YOWTEST, ONLY : IU06
       USE YOWGSTATS, ONLY : WAM_GSTATS_SETUP, WAM_GSTATS_PRINT, &
      &                      WAM_GSTATS_FILE_OPEN, WAM_GSTATS_FILE_CLOSE
-
 ! ----------------------------------------------------------------------
 
       IMPLICIT NONE
@@ -140,6 +139,7 @@
       INTEGER(KIND=JWIM) :: NATMFLX
       INTEGER(KIND=JWIM) :: NGAUSSW, NLON, NLAT
       INTEGER(KIND=JWIM) :: IGRIB_HANDLE_DUM
+      INTEGER(KIND=JWIM) :: IGRIB_HANDLE_DUM2
       INTEGER(KIND=JWIM) :: NADV
       INTEGER(KIND=JWIM) :: KSTOP, KSTPW
       INTEGER(KIND=JWIM) :: IDUM
@@ -182,8 +182,6 @@
 
 
       time0=-wam_user_clock()
-      TIME_PROPAG=0_JWRB
-      TIME_PHYS=0_JWRB
       IU06=6
 
 !     0.1 INITIALISE MESSAGE PASSING PROTOCOL
@@ -281,6 +279,7 @@
       KSTPW=0  ! only used in coupled model
       IDUM=0
       IGRIB_HANDLE_DUM=-99 ! only used in coupled model
+      IGRIB_HANDLE_DUM2=-99 ! only used in coupled model
       NATMFLX=0
       LWSTOKES=.FALSE.  ! only used in coupled runs with atmospheric model
       RMISS=-999.0_JWRB ! missing data indicator
@@ -334,7 +333,8 @@
         timestep_start = - wam_user_clock()
         CALL WAVEMDL(CBEGDAT, PSTEP, KSTOP, KSTPW,                      &
      &             NFIELDS, NGPTOTG, NC, NR,                            &
-     &             IGRIB_HANDLE_DUM, RMISS, ZRCHAR, FIELDS,             &
+     &             IGRIB_HANDLE_DUM, IGRIB_HANDLE_DUM2,                 &
+     &             RMISS, ZRCHAR, FIELDS,                               &
      &             NATMFLX,                                             &
      &             LWCUR, LWSTOKES,                                     &
      &             LLINIT_WVFLDG, NWVFIELDS, WVFLDG,                    &
@@ -389,8 +389,15 @@
       WRITE (IU06,'(A,F18.2,A)') ' + ', time, '         +'
       WRITE (IU06,'(A)') ' + WAVE PROPAGATION TIME      +'
       WRITE (IU06,'(A,F18.2,A)') ' + ', TIME_PROPAG, '         +'
+#if defined(WAM_GPU)
       WRITE (IU06,'(A)') ' + SOURCE TERM TIME           +'
       WRITE (IU06,'(A,F18.2,A)') ' + ', TIME_PHYS, '         +'
+      WRITE (IU06,'(A)') ' + DATA OFFLOAD TIME          +'
+      WRITE (IU06,'(A,F18.2,A)') ' + ', TIME_OFFLOAD, '         +'
+#else
+      WRITE (IU06,'(A)') ' + SOURCE TERM TIME           +'
+      WRITE (IU06,'(A,F18.2,A)') ' + ', TIME_PHYS, '         +'
+#endif
       WRITE (IU06,'(A)') ' +                            +'
       WRITE (IU06,'(A,I8,A)') ' + ON PE : ', IRANK, '           +'
       WRITE (IU06,'(A)') ' ++++++++++++++++++++++++++++++'
@@ -400,8 +407,15 @@
         WRITE (6,'(A,F18.2,A)') ' + ', time, '         +'
         WRITE (6,'(A)') ' + WAVE PROPAGATION TIME      +'
         WRITE (6,'(A,F18.2,A)') ' + ', TIME_PROPAG, '         +'
+#if defined(WAM_GPU)
         WRITE (6,'(A)') ' + SOURCE TERM TIME           +'
         WRITE (6,'(A,F18.2,A)') ' + ', TIME_PHYS, '         +'
+        WRITE (6,'(A)') ' + DATA OFFLOAD TIME          +'
+        WRITE (6,'(A,F18.2,A)') ' + ', TIME_OFFLOAD, '         +'
+#else
+        WRITE (6,'(A)') ' + SOURCE TERM TIME           +'
+        WRITE (6,'(A,F18.2,A)') ' + ', TIME_PHYS, '         +'
+#endif
         WRITE (6,'(A)') ' +                            +'
         WRITE (6,'(A,I8,A)') ' + ON PE : ', IRANK, '           +'
         WRITE (6,'(A)') ' ++++++++++++++++++++++++++++++'

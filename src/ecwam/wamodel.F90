@@ -65,8 +65,8 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
       USE YOWFRED  , ONLY : FR       ,TH
       USE YOWGRID  , ONLY : NPROMA_WAM, NCHNK
       USE YOWICE   , ONLY : LICERUN  ,LMASKICE
-      USE YOWMESPAS, ONLY : LFDBIOOUT,LGRIBOUT ,LNOCDIN  ,LWAVEWIND
-      USE YOWMPP   , ONLY : IRANK    ,NPROC    ,KTAG
+      USE YOWMESPAS, ONLY : LFDBIOOUT, LGRIBOUT , LNOCDIN, LWAVEWIND 
+      USE YOWMPP   , ONLY : IRANK    ,NPROC    ,KTAG 
       USE YOWPARAM , ONLY : NANG     ,NFRE
       USE YOWSTAT  , ONLY : CDATEA   ,CDATEE   ,CDATEF   ,CDTPRO   ,CDTRES   ,    &
      &                      CDATER   ,CDATES   ,CDTINTT  ,IDELPRO  ,IDELT    ,    &
@@ -109,8 +109,13 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
 #include "unsetice.intfb.h"
 #include "updnemofields.intfb.h"
 #include "updnemostress.intfb.h"
-#include "wamintgr.intfb.h"
 #include "writsta.intfb.h"
+
+#ifdef WAM_GPU
+#include "wamintgr_loki_gpu.intfb.h"
+#else
+#include "wamintgr.intfb.h"
+#endif
 
       INTEGER(KIND=JWIM), INTENT(IN)                                           :: NADV
       LOGICAL, INTENT(INOUT)                                                   :: LDSTOP, LDWRRE
@@ -248,10 +253,17 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
         CDATEWH = CDATEWO
         ILOOP = 1
         DO WHILE ( ILOOP == 1 .OR. CDTIMPNEXT <= CDTPRO)
+#ifdef WAM_GPU
+          CALL WAMINTGR_LOKI_GPU(CDTPRA, CDATE, CDATEWH, CDTIMP, CDTIMPNEXT, &
+ &                       BLK2GLO,                                    &
+ &                       WVENVI, WVPRPT, FF_NOW, FF_NEXT, INTFLDS,   &
+ &                       WAM2NEMO, MIJ, FL1, XLLWS)
+#else
           CALL WAMINTGR (CDTPRA, CDATE, CDATEWH, CDTIMP, CDTIMPNEXT, &
  &                       BLK2GLO,                                    &
  &                       WVENVI, WVPRPT, FF_NOW, FF_NEXT, INTFLDS,   &
  &                       WAM2NEMO, MIJ, FL1, XLLWS)
+#endif
           ILOOP = ILOOP +1
         ENDDO
 
@@ -363,11 +375,11 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
 
               CALL SAVSTRESS(WVENVI, FF_NOW, NBLKS, NBLKE, CDTPRO, CDATEF)
               WRITE(IU06,*) ' '
-              WRITE(IU06,*) '  BINARY STRESS FILE DISPOSED AT........ CDTPRO  = ', CDTPRO
+              WRITE(IU06,*) ' BINARY STRESS FILE DISPOSED AT........ CDTPRO  = ', CDTPRO
               WRITE(IU06,*) ' '
 
               CALL SAVSPEC(FL1, NBLKS, NBLKE, CDTPRO, CDATEF, CDATER)
-              WRITE(IU06,*) '  BINARY WAVE SPECTRA DISPOSED AT........ CDTPRO  = ', CDTPRO
+              WRITE(IU06,*) ' BINARY WAVE SPECTRA DISPOSED AT........ CDTPRO  = ', CDTPRO
               WRITE(IU06,*) ' '
               CALL FLUSH(IU06)
             ENDIF
