@@ -26,9 +26,10 @@
       USE YOWWIND  , ONLY : FF_NEXT
 
       USE YOWNEMOFLDS , ONLY : WAM2NEMO, NEMO2WAM
+      USE YOWFRED     , ONLY : WVPRPT_LAND
 
       USE YOMHOOK  , ONLY : LHOOK,   DR_HOOK, JPHOOK
-      USE FIELD_DEFAULTS_MODULE, ONLY : INIT_PINNED_VALUE, POOL_OWNED_FIELDS
+      USE FIELD_DEFAULTS_MODULE, ONLY : INIT_PINNED_VALUE
 
 ! ----------------------------------------------------------------------
 
@@ -48,7 +49,6 @@
 #ifdef WAM_HAVE_CUDA
 !.... Enable pinning of fields in page-locked memory
       INIT_PINNED_VALUE=.TRUE.
-      POOL_OWNED_FIELDS=.TRUE.
 #endif
 
       IF (.NOT. WVPRPT%LALLOC)THEN
@@ -118,10 +118,11 @@
         ENDDO
       ENDIF
 
+      IF (.NOT. WVPRPT_LAND%LALLOC) CALL WVPRPT_LAND%ALLOC(UBOUNDS=[NFRE])
+
 #ifdef WAM_HAVE_CUDA
 !.... Enable pinning of fields in page-locked memory
       INIT_PINNED_VALUE=.FALSE.
-      POOL_OWNED_FIELDS=.FALSE.
 #endif
 
       IF (LHOOK) CALL DR_HOOK('WVALLOC',1,ZHOOK_HANDLE)
