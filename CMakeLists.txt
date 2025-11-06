@@ -44,30 +44,48 @@ ecbuild_add_option( FEATURE MPI
 
 ecbuild_add_option( FEATURE MULTIO
                     DESCRIPTION "Support for IO to the FDB"
-                    REQUIRED_PACKAGES "multio" )
+                    REQUIRED_PACKAGES "multio VERSION 2.1" )
 
 ecbuild_add_option( FEATURE SINGLE_PRECISION
                     DEFAULT OFF
                     DESCRIPTION "Support for Single Precision" )
 
+ecbuild_add_option( FEATURE DOUBLE_PRECISION
+                    DEFAULT ON
+                    DESCRIPTION "Support for Double Precision" )
+
 ecbuild_add_option( FEATURE UNWAM
                     DEFAULT OFF
                     DESCRIPTION "Support for UNWAM" )
 
+set( HAVE_dp ${HAVE_DOUBLE_PRECISION} )
+set( HAVE_sp ${HAVE_SINGLE_PRECISION} )
+
+# if built as part of ifs-bundle, build only precision requested via directory name
+if ( ${PROJECT_NAME} STREQUAL "ecwam_dp" )
+  unset( HAVE_sp )
+elseif( ${PROJECT_NAME} STREQUAL "ecwam_sp" )
+  unset( HAVE_dp )
+endif()
+
 ### Determine ocean model precision
-if( NOT DEFINED OCEAN_PREC )
+if( DEFINED OCEAN_PREC )
+  string( TOLOWER "${OCEAN_PREC}" ocean_prec )
+  set(nemo_prec "nemo_${ocean_prec}")
+else()
+  set(nemo_prec "")
   if( HAVE_SINGLE_PRECISION )
-     set(OCEAN_PREC SP)
-  else()
-     set(OCEAN_PREC DP)
+     set(nemo_prec "${nemo_prec};nemo_sp")
+  endif()
+  if( HAVE_DOUBLE_PRECISION )
+     set(nemo_prec "${nemo_prec};nemo_dp")
   endif()
 endif()
-string( TOLOWER "${OCEAN_PREC}" ocean_prec )
 
-ecbuild_add_option( FEATURE OCEAN_COUPLING 
+ecbuild_add_option( FEATURE OCEAN_COUPLING
                     DEFAULT ON
                     DESCRIPTION "Support ocean coupling"
-                    REQUIRED_PACKAGES "nemo_${ocean_prec}" )
+                    REQUIRED_PACKAGES ${nemo_prec} )
 
 ecbuild_add_option( FEATURE ECWAM_LAUNCH
                     DEFAULT ON
@@ -92,12 +110,6 @@ ecwam_find_python_mods()
 
 ### Set third party libraries
 
-if( HAVE_SINGLE_PRECISION )
-  set( prec sp )
-else()
-  set( prec dp )
-endif()
-
 unset( OpenMP_Fortran_LIBRARIES )
 if( HAVE_OMP )
   set( OpenMP_Fortran_LIBRARIES OpenMP::OpenMP_Fortran )
@@ -110,10 +122,11 @@ ecbuild_add_option( FEATURE LOKI
                     REQUIRED_PACKAGES "loki" )
 
 # Set default Loki transformation mode
-set( LOKI_MODE "scc-hoist" CACHE STRING "Transformation mode for Loki source transformations" )
+set( LOKI_MODE "scc-stack" CACHE STRING "Transformation mode for Loki source transformations" )
 
 ### OpenACC
-if( ${CMAKE_VERSION} VERSION_LESS "3.25" AND (NOT DEFINED ENABLE_ACC OR ENABLE_ACC ) )
+if( ${CMAKE_VERSION} VERSION_LESS "3.25" AND HAVE_LOKI AND NOT LOKI_MODE MATCHES "idem|idem-stack" )
+  if ( ${PNAME}_ENABLE_ACC OR (NOT DEFINED ${PNAME}_ENABLE_ACC AND ENABLE_ACC) )
     # Incredibly inconvenient: FindOpenACC does _not_ set OpenACC_FOUND, only
     # the language-specific components OpenACC_Fortran_FOUND and OpenACC_C_FOUND.
     # This means, even internally CMake considers OpenACC as not found.
@@ -124,19 +137,30 @@ if( ${CMAKE_VERSION} VERSION_LESS "3.25" AND (NOT DEFINED ENABLE_ACC OR ENABLE_A
     # and rectifies CMake's internal bookkeeping in the process.
     # This has been fixed in CMake 3.25
     find_package( OpenACC )
-    if( OpenACC_Fortran_FOUND AND OpenACC_C_FOUND )
+    if( OpenACC_Fortran_FOUND )
         set( OpenACC_FOUND ON )
     endif()
+  endif()
 endif()
 ecbuild_add_option( FEATURE ACC
                     DESCRIPTION "OpenACC" DEFAULT OFF
-                    REQUIRED_PACKAGES "OpenACC" 
+                    REQUIRED_PACKAGES "OpenACC COMPONENTS Fortran"
                     CONDITION HAVE_LOKI AND NOT LOKI_MODE MATCHES "idem|idem-stack" )
 
-### CUDA-aware MPI
+### CUDA
+include(CheckLanguage)
+check_language(CUDA)
+ecbuild_add_option( FEATURE CUDA
+    DESCRIPTION "CUDA" DEFAULT OFF
+    CONDITION CMAKE_CUDA_COMPILER AND HAVE_ACC )
+if( HAVE_CUDA )
+    enable_language( CUDA )
+endif()
+
+### GPU-aware MPI
 ecbuild_add_option( FEATURE GPU_AWARE_MPI
                     DEFAULT OFF
-                    DESCRIPTION "Enable GPU-aware MPI" 
+                    DESCRIPTION "Enable GPU-aware MPI"
                     CONDITION HAVE_ACC AND MPI_Fortran_HAVE_F08_MODULE )
 
 ### Sources
@@ -161,4 +185,3 @@ add_subdirectory(doc)
 ecbuild_install_project( NAME ${PROJECT_NAME} )
 
 ecbuild_print_summary()
-

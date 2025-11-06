@@ -23,7 +23,7 @@ source ${SCRIPTS_DIR}/ecwam_runtime.sh
 source ${SCRIPTS_DIR}/ecwam_parse_commandline.sh
 source ${SCRIPTS_DIR}/ecwam_helper_functions.sh
 
-assert_executable_is_available ${MODEL} || abort 4
+assert_executable_is_available ${MODEL}-${prec} || abort 4
 
 begofrn=$(read_config begin               --format="%Y%m%d%H%M%S")
 endofrn=$(read_config end                 --format="%Y%m%d%H%M%S")
@@ -85,12 +85,18 @@ nproma=$(read_config nproma --default=24)
 iphys=$(read_config iphys --default=1)
 llgcbz0=$(read_config llgcbz0 --default=F)
 llnormagam=$(read_config llnormagam --default=F)
+irefra=$(read_config irefra --default=0)
+lciwa1=$(read_config lciwa1 --default=F)
+lciwa2=$(read_config lciwa2 --default=F)
+lciwa3=$(read_config lciwa3 --default=F)
+lciscal=$(read_config lciscal --default=F)
 
 # read timesteps
 phys_tstp=$(read_config physics.timestep --format=seconds --default=900)
 adv_base_tstp=$(read_config advection.timestep --format=seconds --default=900)
 adv_fast_tstp=$(read_config advection.fast_waves.timestep --format=seconds --default=$adv_base_tstp)
 ifrelfmax=$(read_config advection.fast_waves.max_frequency --default=0)
+idelcur=$(read_config currents.input_step --default=86400)
 
 # verify timesteps
 if [ $(( $adv_base_tstp%$adv_fast_tstp )) -ne 0 ] ; then
@@ -211,11 +217,13 @@ cat > wam_namelist << EOF
   CBPLTDT               = "${begofrn}",
   CEPLTDT               = "${endofrn}",
   CDATEF                = "${begoffo}",
+  CDATECURA             = "${begofrn}",
   DELPRO_LF             = ${adv_fast_tstp},
   IFRELFMAX             = ${ifrelfmax},
   IDELPRO               = ${adv_base_tstp},
   IDELT                 = ${phys_tstp},
   IDELINT               = ${ppfreq},
+  IDELCUR               = ${idelcur}
   IREST                 = 1,
   LFDBIOOUT             = F,
   LFDB                  = F,
@@ -228,7 +236,7 @@ cat > wam_namelist << EOF
   LLNORMAGAM            = ${llnormagam},
   IPROPAGS              = 2,
   LSUBGRID              = F,
-  IREFRA                = 0,
+  IREFRA                = ${irefra},
   LICERUN               = ${licerun},
   LMASKICE              = T,
   LWAMRSETCI            = T,
@@ -249,10 +257,14 @@ cat > wam_namelist << EOF
   LRSTPARALR            = F,
   LRSTPARALW            = F,
   LSECONDORDER          = F,
-  LWVFLX_SNL            = F,
+  LWVFLX_SNL            = T,
   LLNORMWAMOUT          = T,
   LLNORMWAMOUT_GLOBAL   = T,
   CNORMWAMOUT_FILE      = "statistics.log",
+  LCIWA1                = ${lciwa1},
+  LCIWA2                = ${lciwa2},
+  LCIWA3                = ${lciwa3},
+  LCISCAL               = ${lciscal},
   ${OUTPUT_FLAGS}
 /
 ${NAWI}
@@ -267,7 +279,10 @@ echo "**************************************************************************
 log cat wam_namelist
 echo
 
-precision=$(${ECWAM_PROJECT_NAME} --precision)
+precision="double"
+if [ "${prec}" = "sp" ]; then
+    precision="single"
+fi;
 if ${dryrun}; then
   echo "*******************************************************************************"
   echo "WAVE MODEL DRYRUN"
@@ -276,7 +291,7 @@ if ${dryrun}; then
   echo "  cd ${RUN_DIR}/workdir"
   echo
   echo "#2 Execute wave model\n"
-  echo "  $(abs_path ${MODEL})"
+  echo "  $(abs_path ${MODEL}-${prec})"
   echo 
   echo "#3 Validate results\n"
   echo "  ${SCRIPTS_DIR}/ecwam_validation.py config.yml statistics.log --section=validation.${precision}_precision"
@@ -288,12 +303,12 @@ fi
 
 echo "*******************************************************************************"
 echo "WAVE MODEL START"
-echo "\n+ ${LAUNCH_PARALLEL} $(which ${MODEL})\n"
+echo "\n+ ${LAUNCH_PARALLEL} $(which ${MODEL}-${prec})\n"
 echo "*******************************************************************************"
 
 
 START=$(date +%s)
-log ${LAUNCH_PARALLEL} $(which ${MODEL}) || {
+log ${LAUNCH_PARALLEL} $(which ${MODEL}-${prec}) || {
   sleep 1
   echo
   echo "*******************************************************************************"
@@ -306,7 +321,7 @@ log ${LAUNCH_PARALLEL} $(which ${MODEL}) || {
 
 END=$(date +%s)
 DIFF=$(( $END - $START ))
-echo "\n\n\t Running ${LAUNCH_PARALLEL} $(which ${MODEL}) took $DIFF seconds\n"
+echo "\n\n\t Running ${LAUNCH_PARALLEL} $(which ${MODEL}-${prec}) took $DIFF seconds\n"
 
 trace_ls $(pwd)
 
