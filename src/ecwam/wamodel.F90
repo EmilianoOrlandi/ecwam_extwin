@@ -7,9 +7,9 @@
 ! nor does it submit to any jurisdiction.
 !
 
-SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
+SUBROUTINE WAMODEL (NADV, LINIONLY, LFRSTRST, LDSTOP, LDWRRE, BLK2GLO,&
  &                  WVENVI, WVPRPT, FF_NOW, FF_NEXT, INTFLDS,  &
- &                  WAM2NEMO, NEMO2WAM, FL1)
+ &                  WAM2NEMO, NEMO2WAM, VARS_4D)
 
 ! ----------------------------------------------------------------------
 
@@ -26,11 +26,13 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
 !**   INTERFACE.
 !     ----------
 
-!     *CALL* *WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,
+!     *CALL* *WAMODEL (NADV, LINIONLY, LFRSTRST, LDSTOP, LDWRRE, BLK2GLO,
 !    &                 WVENVI, WVPRPT, FF_NOW, FF_NEXT, INTFLDS,
 !    &                 WAM2NEMO, NEMO2WAM, FL1)
 !        *NADV*      NUMBER OF ADVECTION ITERATIONS
 !                    PER CALL OF WAMODEL, OUTPUT PARAMETER.
+!        *LINIONLY*  INITIALISATION ONLY CALL (i.e. NO FOWARD TIME INTEGRATION) 
+!        *LFRSTRST*  FIRST TIME INTEGRATION AFTER RESTART
 !        *LDSTOP*    SET .TRUE. IF STOP SIGNAL RECEIVED.
 !        *LDWRRE*    SET .TRUE. IF RESTART SIGNAL RECEIVED.
 !        *BLK2GLO*   BLOCK TO GRID TRANSFORMATION
@@ -46,23 +48,24 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
 
       USE PARKIND_WAVE, ONLY : JWIM, JWRB, JWRU
       USE YOWDRVTYPE  , ONLY : WVGRIDGLO, ENVIRONMENT, FREQUENCY, FORCING_FIELDS,  &
-     &                         INTGT_PARAM_FIELDS, WAVE2OCEAN, OCEAN2WAVE
+     &                         INTGT_PARAM_FIELDS, WAVE2OCEAN, OCEAN2WAVE, TYPE_4D, &
+                               MIJ_TYPE
 
       USE YOWCPBO  , ONLY : IBOUNC   ,GBOUNC  , IPOGBO  , CBCPREF
       USE YOWCOUP  , ONLY : LWCOU    ,                                  &
      &                      LWNEMOCOU,                                  &
      &                      NEMOWSTEP, NEMOFRCO     ,                   &
-     &                      NEMOCSTEP, NEMONSTEP
+     &                      NEMOCSTEP, NEMONSTEP    , KCOUSTEP, LLNORMWAMOUT
       USE YOWCOUT  , ONLY : COUTT    ,COUTS    ,FFLAG20  ,GFLAG20  ,    &
      &                      NGOUT    ,                                  &
      &                      NIPRMOUT ,                                  &
      &                      LFDB     ,NOUTT    ,NOUTS    ,              &
      &                      CASS     ,NASS     ,LOUTINT  ,              &
      &                      LRSTPARALW, LRSTINFDAT,                     &
-     &                      LRSTST0  ,LWAMANOUT
+     &                      LRSTST0  ,LWAMANOUT, F_BOUT
       USE YOWCURR  , ONLY : CDTCUR
       USE YOWFPBO  , ONLY : IBOUNF
-      USE YOWFRED  , ONLY : FR       ,TH
+      USE YOWFRED  , ONLY : FR       ,TH, WVPRPT_LAND
       USE YOWGRID  , ONLY : NPROMA_WAM, NCHNK
       USE YOWICE   , ONLY : LICERUN  ,LMASKICE
       USE YOWMESPAS, ONLY : LFDBIOOUT, LGRIBOUT , LNOCDIN, LWAVEWIND 
@@ -73,8 +76,8 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
      &                      IDELWI   ,IREST    ,IDELRES  ,IDELINT  ,              &
      &                      CDTBC    ,IDELBC   ,                                  &
      &                      IASSI    ,MARSTYPE ,                                  &
-     &                      LLSOURCE ,LANAONLY ,LFRSTFLD ,IREFDATE
-      USE YOWSPEC, ONLY   : NBLKS    ,NBLKE
+     &                      LLSOURCE ,LANAONLY ,LFRSTFLD ,IREFDATE, LUPDATE_GPU_GLOBALS
+      USE YOWSPEC, ONLY   : NBLKS    ,NBLKE, MIJ
       USE YOWTEST  , ONLY : IU06
       USE YOWTEXT  , ONLY : ICPLEN   ,CPATH    ,CWI      ,LRESTARTED
       USE YOWUNIT  , ONLY : IU02     ,IU19     ,IU20
@@ -85,6 +88,9 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
       USE MPL_MODULE, ONLY : MPL_BARRIER
       USE WAM_MULTIO_MOD, ONLY : WAM_MULTIO_FLUSH
       USE YOMHOOK  , ONLY : LHOOK,   DR_HOOK, JPHOOK
+      USE YOWABORT , ONLY : WAM_ABORT
+      USE FIELD_ASYNC_MODULE, ONLY : WAIT_FOR_ASYNC_QUEUE
+      USE FIELD_FACTORY_MODULE, ONLY : FIELD_NEW
 
 
 ! ----------------------------------------------------------------------
@@ -93,6 +99,7 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
 
 #include "outwint.intfb.h"
 #include "outwpsp.intfb.h"
+#include "outwnorm.intfb.h"
 #include "abort1.intfb.h"
 #include "bouinpt.intfb.h"
 #include "difdate.intfb.h"
@@ -101,23 +108,25 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
 #include "iwam_get_unit.intfb.h"
 #include "incdate.intfb.h"
 #include "outbc.intfb.h"
-#include "outbs.intfb.h"
 #include "outspec.intfb.h"
 #include "outstep0.intfb.h"
 #include "savspec.intfb.h"
 #include "savstress.intfb.h"
-#include "unsetice.intfb.h"
 #include "updnemofields.intfb.h"
 #include "updnemostress.intfb.h"
 #include "writsta.intfb.h"
 
 #ifdef WAM_GPU
+#include "outbs_loki_gpu.intfb.h"
 #include "wamintgr_loki_gpu.intfb.h"
 #else
+#include "outbs.intfb.h"
 #include "wamintgr.intfb.h"
 #endif
 
       INTEGER(KIND=JWIM), INTENT(IN)                                           :: NADV
+      LOGICAL, INTENT(IN)                                                      :: LINIONLY      
+      LOGICAL, INTENT(INOUT)                                                   :: LFRSTRST
       LOGICAL, INTENT(INOUT)                                                   :: LDSTOP, LDWRRE
       TYPE(WVGRIDGLO), INTENT(IN)                                              :: BLK2GLO
       TYPE(ENVIRONMENT), INTENT(INOUT)                                         :: WVENVI
@@ -127,7 +136,7 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
       TYPE(INTGT_PARAM_FIELDS), INTENT(INOUT)                                  :: INTFLDS
       TYPE(WAVE2OCEAN), INTENT(INOUT)                                          :: WAM2NEMO
       TYPE(OCEAN2WAVE), INTENT(IN)                                             :: NEMO2WAM
-      REAL(KIND=JWRB), DIMENSION(NPROMA_WAM, NANG, NFRE, NCHNK), INTENT(INOUT) :: FL1
+      TYPE(TYPE_4D), INTENT(INOUT)                                             :: VARS_4D
 
 
       INTEGER(KIND=JWIM) :: IJ, K, M, J, IRA, KADV, ICH
@@ -135,11 +144,10 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
       INTEGER(KIND=JWIM) :: ICHNK
       INTEGER(KIND=JWIM) :: JSTPNEMO, IDATE, ITIME
       INTEGER(KIND=JWIM) :: IU04
-      INTEGER(KIND=JWIM), DIMENSION(NPROMA_WAM, NCHNK) :: MIJ
 
-      REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
-      REAL(KIND=JWRB), DIMENSION(NPROMA_WAM, MAX(NIPRMOUT,1), NCHNK) :: BOUT
-      REAL(KIND=JWRB), DIMENSION(NPROMA_WAM, NANG, NFRE, NCHNK) :: XLLWS
+      REAL(KIND=JPHOOK) :: ZHOOK_HANDLE, ZHOOK_HANDLE_DATA_OFFLOAD, &
+      &                    ZHOOK_HANDLE_ADVECTION_LOOP, ZHOOK_HANDLE_IO
+      REAL(KIND=JWRB), POINTER, CONTIGUOUS :: BOUT(:,:,:) => NULL()
 
       CHARACTER(LEN= 2) :: MARSTYPEBAK
       CHARACTER(LEN=14) :: CDATEWH, CZERO
@@ -148,6 +156,7 @@ SUBROUTINE WAMODEL (NADV, LDSTOP, LDWRRE, BLK2GLO,             &
       LOGICAL :: LLFLUSH
       LOGICAL :: LSV, LRST, LOUT
       LOGICAL :: LLNONASSI
+      LOGICAL :: LPIN
 
 ! ----------------------------------------------------------------------
 
@@ -167,43 +176,55 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
 !     TIME FOR WIND INPUT UPDATE (SEE NEWWIND)
       CDTIMP = CDTPRO
 
-!     0.1 MINIMUM ENERGY
-!         --------------
-      IF (CDTPRO == CDATEA .AND. LLSOURCE ) THEN
-!       INSURE THERE IS SOME WAVE ENERGY FOR GRID POINTS THAT HAVE BEEN
-!       FREED FROM SEA ICE (ONLY DONE INITIALLY AND IF THE MODEL IS NOT
-!       RESTARTED).
-!       IT ALSO RESETS THE MIMIMUM ENERGY LEVEL THAT MIGHT HAVE BEEN LOST
-!       WHEN GETTING THE DATA FROM GRIB.
-        CALL GSTATS(1236,0)
-!$OMP   PARALLEL DO SCHEDULE(DYNAMIC,1) PRIVATE(ICHNK)
-        DO ICHNK = 1, NCHNK
-          CALL UNSETICE(1, NPROMA_WAM, WVENVI%DEPTH(:,ICHNK), WVENVI%EMAXDPT(:,ICHNK), FF_NOW%WDWAVE(:,ICHNK), &
- &                      FF_NOW%WSWAVE(:,ICHNK), FF_NOW%CICOVER(:,ICHNK), FL1(:,:,:,ICHNK) )
-        ENDDO
-!$OMP   END PARALLEL DO
-        CALL GSTATS(1236,1)
-      ENDIF
-
-
-!     0.2 OUTPUT INITIAL CONDITION AND/OR FORECAST STEP 0
-!         -----------------------------------------------
-      IF (CDTPRO == CDATEA .OR. CDTPRO == CDATEF) THEN
+!     0.2 FORECAST STEP 0 IF ANALYSIS IS FOLLOWED BY FORECAST (uncoupled only)
+!         --------------------------------------------------------------------
+      IF (.NOT.LWCOU .AND. CDTPRO /= CDATEA .AND. CDTPRO == CDATEF) THEN
          CALL OUTSTEP0 (WVENVI, WVPRPT, FF_NOW, INTFLDS,  &
- &                      WAM2NEMO, NEMO2WAM, FL1)
+ &                      WAM2NEMO, NEMO2WAM, VARS_4D%FL1, LINIONLY)
       ENDIF
-
-
-
 
 !*    1. ADVECTION/PHYSICS TIME LOOP.
 !        ----------------------------
+
+      IF (LHOOK) CALL DR_HOOK('ADVECTION_LOOP',0,ZHOOK_HANDLE_ADVECTION_LOOP)
+
+      LPIN = .FALSE.
+#ifdef WAM_HAVE_CUDA
+      LPIN = .TRUE.
+#endif
+      IF (.NOT. ASSOCIATED(F_BOUT)) THEN
+        CALL FIELD_NEW(F_BOUT, UBOUNDS=[NPROMA_WAM, NIPRMOUT, NCHNK], PINNED=LPIN, PERSISTENT=.TRUE.)
+      ENDIF
+
+#ifdef WAM_GPU
+      IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+      CALL WVPRPT_LAND%SYNC_DEVICE_RDONLY(QUEUE=1)
+      CALL VARS_4D%SYNC_DEVICE_RDWR(FL1=.TRUE., QUEUE=1)
+      CALL BLK2GLO%SYNC_DEVICE_RDONLY(QUEUE=1)
+      CALL WVPRPT%SYNC_DEVICE_RDWR(QUEUE=1)
+      CALL WVENVI%SYNC_DEVICE_RDWR(DEPTH=.TRUE., DELLAM1=.TRUE., COSPHM1=.TRUE., UCUR=.TRUE., VCUR=.TRUE., &
+      &                            EMAXDPT=.TRUE., IOBND=.TRUE., IODP=.TRUE., QUEUE=1)
+      CALL FF_NOW%SYNC_DEVICE_RDWR(AIRD=.TRUE., WDWAVE=.TRUE., CICOVER=.TRUE., WSWAVE=.TRUE.,  &
+      & WSTAR=.TRUE., UFRIC=.TRUE., TAUW=.TRUE., TAUWDIR=.TRUE., Z0M=.TRUE., Z0B=.TRUE.,  &
+      & CHRNCK=.TRUE., CITHICK=.TRUE., USTRA=.TRUE., VSTRA=.TRUE., QUEUE=2)
+      CALL FF_NEXT%SYNC_DEVICE_RDONLY(AIRD=.TRUE., WDWAVE=.TRUE., CICOVER=.TRUE., WSWAVE=.TRUE.,  &
+      & WSTAR=.TRUE., UFRIC=.TRUE., TAUW=.TRUE., TAUWDIR=.TRUE., Z0M=.TRUE., Z0B=.TRUE.,  &
+      & CHRNCK=.TRUE., CITHICK=.TRUE., USTRA=.TRUE., VSTRA=.TRUE., QUEUE=2)
+      CALL WAM2NEMO%SYNC_DEVICE_RDWR(NEMOUSTOKES=.TRUE., NEMOVSTOKES=.TRUE., NEMOSTRN=.TRUE.,  &
+      & NPHIEPS=.TRUE., NTAUOC=.TRUE., NSWH=.TRUE., NMWP=.TRUE., NEMOTAUX=.TRUE.,  &
+      & NEMOTAUY=.TRUE., NEMOWSWAVE=.TRUE., NEMOPHIF=.TRUE., QUEUE=3)
+      CALL INTFLDS%SYNC_DEVICE_RDWR(WSEMEAN=.TRUE., WSFMEAN=.TRUE., USTOKES=.TRUE.,  &
+      & VSTOKES=.TRUE., STRNMS=.TRUE., TAUXD=.TRUE., TAUYD=.TRUE., TAUOCXD=.TRUE.,  &
+      & TAUOCYD=.TRUE., TAUOC=.TRUE., PHIOCD=.TRUE., PHIEPS=.TRUE., PHIAW=.TRUE., QUEUE=3)
+      CALL VARS_4D%SYNC_DEVICE_RDWR(XLLWS=.TRUE., QUEUE=3)
+      CALL MIJ%SYNC_DEVICE_RDWR(QUEUE=3)
+      IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
 
       ADVECTION : DO KADV = 1,NADV
 
 !*      1.1 FIX END DATE OF THIS PROPAGATION STEP AND OUTPUT TIMES.
 !           -------------------------------------------------------
-
         CDTPRA = CDTPRO
         CALL INCDATE(CDTPRO, IDELPRO)
 
@@ -216,7 +237,15 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
             ENDIF
           ENDDO
         ELSE
-          IF ((FFLAG20.OR.GFLAG20) .AND. CDTINTT.LT.CDTPRO) CALL INCDATE (CDTINTT, IDELINT)
+          IF ((FFLAG20.OR.GFLAG20))  THEN
+            IF (LWCOU .AND. LRESTARTED .AND. LFRSTRST ) THEN
+              LFRSTRST = .FALSE.
+              CALL INCDATE (CDTINTT, KCOUSTEP)
+            ENDIF
+            IF (CDTINTT.LT.CDTPRO) THEN
+              CALL INCDATE (CDTINTT, IDELINT)
+            ENDIF
+          ENDIF
         ENDIF
 
 !       UPDATE SPECTRA OUTPUT DATE
@@ -257,12 +286,12 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
           CALL WAMINTGR_LOKI_GPU(CDTPRA, CDATE, CDATEWH, CDTIMP, CDTIMPNEXT, &
  &                       BLK2GLO,                                    &
  &                       WVENVI, WVPRPT, FF_NOW, FF_NEXT, INTFLDS,   &
- &                       WAM2NEMO, MIJ, FL1, XLLWS)
+ &                       WAM2NEMO, MIJ, VARS_4D)
 #else
           CALL WAMINTGR (CDTPRA, CDATE, CDATEWH, CDTIMP, CDTIMPNEXT, &
  &                       BLK2GLO,                                    &
  &                       WVENVI, WVPRPT, FF_NOW, FF_NEXT, INTFLDS,   &
- &                       WAM2NEMO, MIJ, FL1, XLLWS)
+ &                       WAM2NEMO, MIJ, VARS_4D)
 #endif
           ILOOP = ILOOP +1
         ENDDO
@@ -288,27 +317,56 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
 !NEST (not used at ECMWF)
 !*      1.4.1 INPUT OF BOUNDARY VALUES.
 !           -------------------------
-        IF (IBOUNF == 1) CALL BOUINPT (IU02, FL1, NBLKS, NBLKE)
+#ifdef _OPENACC
+        IF(IBOUNF == 1)THEN
+            CALL WAM_ABORT("WAMODEL: IBOUNF==1 NOT SUPPORTED FOR GPU OFFLOAD")
+        ENDIF
+#endif
+        IF (IBOUNF == 1) CALL BOUINPT (IU02, VARS_4D%FL1, NBLKS, NBLKE)
 !*      1.4.2 OUTPUT OF BOUNDARY POINTS.
 !           --------------------------
-        IF (IBOUNC == 1) CALL OUTBC (FL1, BLK2GLO, IU19)
+        IF (IBOUNC == 1) CALL OUTBC (VARS_4D%FL1, BLK2GLO, IU19)
 !NEST
 
+!       1.6 COMPUTE OUTPUT PARAMETERS FIELDS AND PRINT OUT NORMS
+!           ----------------------------------------------------
+        IF ( (CDTINTT == CDTPRO .OR. LRST) .AND. NIPRMOUT > 0 ) THEN
+
+#ifdef WAM_GPU
+          IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+          CALL F_BOUT%GET_DEVICE_DATA_WRONLY(BOUT)
+          IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+          CALL OUTBS_LOKI_GPU (MIJ%PTR, VARS_4D%FL1, VARS_4D%XLLWS, &
+     &                WVPRPT, WVENVI, FF_NOW, INTFLDS, NEMO2WAM,   &
+     &                BOUT)
+          IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+          CALL F_BOUT%GET_HOST_DATA_RDONLY(BOUT)
+          IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+          IF (LLNORMWAMOUT) CALL OUTWNORM(.TRUE., BOUT)
+#else
+          CALL F_BOUT%GET_HOST_DATA_RDWR(BOUT)
+          CALL OUTBS (MIJ%PTR, VARS_4D%FL1, VARS_4D%XLLWS, &
+     &                WVPRPT, WVENVI, FF_NOW, INTFLDS, NEMO2WAM,   &
+     &                BOUT)
+#endif
+
+        ENDIF
 
 !*      1.5 POINT OUTPUT (not usually used at ECMWF)
 !           ----------------------------------------
         IF ( NGOUT > 0 .AND. (CDTINTT == CDTPRO .OR. LRST) ) THEN
 !           OUTPUT POINT SPECTRA (not usually used at ECMWF)
-            CALL OUTWPSP (FL1, FF_NOW)
-        ENDIF
+#ifdef WAM_GPU
+            IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+            CALL WAIT_FOR_ASYNC_QUEUE(QUEUE=4)
+            CALL VARS_4D%GET_HOST_DATA_RDONLY(FL1=.TRUE.)
+            CALL FF_NOW%GET_HOST_DATA_RDONLY(AIRD=.TRUE., WDWAVE=.TRUE., CICOVER=.TRUE., WSWAVE=.TRUE.,  &
+            & WSTAR=.TRUE., UFRIC=.TRUE., TAUW=.TRUE., TAUWDIR=.TRUE., Z0M=.TRUE., Z0B=.TRUE.,  &
+            & CHRNCK=.TRUE., CITHICK=.TRUE., USTRA=.TRUE., VSTRA=.TRUE.)
+            IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
 
-
-!       1.6 COMPUTE OUTPUT PARAMETERS FIELDS AND PRINT OUT NORMS
-!           ----------------------------------------------------
-        IF ( (CDTINTT == CDTPRO .OR. LRST) .AND. NIPRMOUT > 0 ) THEN
-          CALL OUTBS (MIJ, FL1, XLLWS,                             &
-     &                WVPRPT, WVENVI, FF_NOW, INTFLDS, NEMO2WAM,   &
-     &                BOUT)
+            CALL OUTWPSP (VARS_4D%FL1, FF_NOW)
         ENDIF
 
 
@@ -359,7 +417,17 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
                 MARSTYPE='an'
               ENDIF
 
-              CALL OUTSPEC(FL1, FF_NOW)
+#ifdef WAM_GPU
+              IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+              CALL WAIT_FOR_ASYNC_QUEUE(QUEUE=4)
+              CALL VARS_4D%GET_HOST_DATA_RDONLY(FL1=.TRUE.)
+              CALL FF_NOW%GET_HOST_DATA_RDONLY(AIRD=.TRUE., WDWAVE=.TRUE., CICOVER=.TRUE., WSWAVE=.TRUE.,  &
+              & WSTAR=.TRUE., UFRIC=.TRUE., TAUW=.TRUE., TAUWDIR=.TRUE., Z0M=.TRUE., Z0B=.TRUE.,  &
+              & CHRNCK=.TRUE., CITHICK=.TRUE., USTRA=.TRUE., VSTRA=.TRUE.)
+              IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
+
+              CALL OUTSPEC(VARS_4D%FL1, FF_NOW)
               LLFLUSH = .TRUE.
 
               MARSTYPE=MARSTYPEBAK
@@ -372,16 +440,31 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
 !           1.8.2 SAVE RESTART FILES IN PURE BINARY FORM (in needed)
 !                 --------------------------------------
             IF ( .NOT.LGRIBOUT .OR. LDWRRE ) THEN
+#ifdef WAM_GPU
+              IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+              CALL WAIT_FOR_ASYNC_QUEUE(QUEUE=4)
+              CALL WAIT_FOR_ASYNC_QUEUE(QUEUE=5)
 
+              CALL VARS_4D%GET_HOST_DATA_RDONLY(FL1=.TRUE.)
+              CALL FF_NOW%GET_HOST_DATA_RDONLY(AIRD=.TRUE., WDWAVE=.TRUE., CICOVER=.TRUE., WSWAVE=.TRUE.,  &
+              & WSTAR=.TRUE., UFRIC=.TRUE., TAUW=.TRUE., TAUWDIR=.TRUE., Z0M=.TRUE., Z0B=.TRUE.,  &
+              & CHRNCK=.TRUE., CITHICK=.TRUE., USTRA=.TRUE., VSTRA=.TRUE.)
+              CALL WVENVI%GET_HOST_DATA_RDONLY(DEPTH=.TRUE., DELLAM1=.TRUE., COSPHM1=.TRUE., UCUR=.TRUE., VCUR=.TRUE., &
+              &                                EMAXDPT=.TRUE., IOBND=.TRUE., IODP=.TRUE.)
+              IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
+
+              IF (LHOOK) CALL DR_HOOK('IO_TIME',0,ZHOOK_HANDLE_IO)
               CALL SAVSTRESS(WVENVI, FF_NOW, NBLKS, NBLKE, CDTPRO, CDATEF)
               WRITE(IU06,*) ' '
               WRITE(IU06,*) ' BINARY STRESS FILE DISPOSED AT........ CDTPRO  = ', CDTPRO
               WRITE(IU06,*) ' '
 
-              CALL SAVSPEC(FL1, NBLKS, NBLKE, CDTPRO, CDATEF, CDATER)
-              WRITE(IU06,*) ' BINARY WAVE SPECTRA DISPOSED AT........ CDTPRO  = ', CDTPRO
+              CALL SAVSPEC(VARS_4D%FL1, NBLKS, NBLKE, CDTPRO, CDATEF, CDATER)
+              WRITE(IU06,*) '  BINARY WAVE SPECTRA DISPOSED AT........ CDTPRO  = ', CDTPRO
               WRITE(IU06,*) ' '
               CALL FLUSH(IU06)
+              IF (LHOOK) CALL DR_HOOK('IO_TIME',1,ZHOOK_HANDLE_IO)
             ENDIF
 
 
@@ -451,7 +534,9 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
             MARSTYPE='an'
           ENDIF
 
+          IF (LHOOK) CALL DR_HOOK('IO_TIME',0,ZHOOK_HANDLE_IO)
           CALL OUTWINT(BOUT)
+          IF (LHOOK) CALL DR_HOOK('IO_TIME',1,ZHOOK_HANDLE_IO)
           LLFLUSH = .TRUE.
 
           MARSTYPE=MARSTYPEBAK
@@ -461,6 +546,17 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
           CALL GSTATS(753,1)
         ENDIF
 
+
+#ifdef WAM_GPU
+        IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+        CALL VARS_4D%SYNC_DEVICE_RDWR(FL1=.TRUE., QUEUE=1)
+        CALL WVENVI%SYNC_DEVICE_RDWR(DEPTH=.TRUE., DELLAM1=.TRUE., COSPHM1=.TRUE., UCUR=.TRUE., VCUR=.TRUE., &
+        &                            EMAXDPT=.TRUE., IOBND=.TRUE., IODP=.TRUE., QUEUE=1)
+        CALL FF_NOW%SYNC_DEVICE_RDWR(AIRD=.TRUE., WDWAVE=.TRUE., CICOVER=.TRUE., WSWAVE=.TRUE.,  &
+        & WSTAR=.TRUE., UFRIC=.TRUE., TAUW=.TRUE., TAUWDIR=.TRUE., Z0M=.TRUE., Z0B=.TRUE.,  &
+        & CHRNCK=.TRUE., CITHICK=.TRUE., USTRA=.TRUE., VSTRA=.TRUE., QUEUE=2)
+        IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
 
 !*      1.10 FLUSH FDB IF IT HAS BEEN USED AND IT IS NOT AN ANALYSIS (it will be done in *wamassi*)
 !            -------------------------------------------------------
@@ -510,6 +606,16 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
           NEMOWSTEP=NEMOWSTEP+1
 
           IF (MOD(NEMOWSTEP,NEMOFRCO) == 0) THEN
+
+#ifdef WAM_GPU
+            IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+            CALL WAIT_FOR_ASYNC_QUEUE(QUEUE=6)
+            CALL WAM2NEMO%GET_HOST_DATA_RDONLY(NEMOUSTOKES=.TRUE., NEMOVSTOKES=.TRUE., NEMOSTRN=.TRUE.,  &
+            & NPHIEPS=.TRUE., NTAUOC=.TRUE., NSWH=.TRUE., NMWP=.TRUE., NEMOTAUX=.TRUE.,  &
+            & NEMOTAUY=.TRUE., NEMOWSWAVE=.TRUE., NEMOPHIF=.TRUE.)
+            IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
+
             CALL UPDNEMOFIELDS
             CALL UPDNEMOSTRESS
 
@@ -521,12 +627,48 @@ IF (LHOOK) CALL DR_HOOK('WAMODEL',0,ZHOOK_HANDLE)
             ENDDO
 #endif
             NEMOCSTEP = NEMOCSTEP + NEMONSTEP
+
+#ifdef WAM_GPU
+            IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+            CALL WAM2NEMO%SYNC_DEVICE_RDWR(NEMOUSTOKES=.TRUE., NEMOVSTOKES=.TRUE., NEMOSTRN=.TRUE.,  &
+            & NPHIEPS=.TRUE., NTAUOC=.TRUE., NSWH=.TRUE., NMWP=.TRUE., NEMOTAUX=.TRUE.,  &
+            & NEMOTAUY=.TRUE., NEMOWSWAVE=.TRUE., NEMOPHIF=.TRUE., QUEUE=3)
+            IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
           ENDIF
         ENDIF
 
 
+        LUPDATE_GPU_GLOBALS = .FALSE.
 !*    BRANCHING BACK TO 1.0 FOR NEXT PROPAGATION STEP.
       ENDDO ADVECTION
+
+#ifdef WAM_GPU
+      IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',0,ZHOOK_HANDLE_DATA_OFFLOAD)
+      CALL WVPRPT_LAND%GET_HOST_DATA_RDWR()
+      CALL WVPRPT%GET_HOST_DATA_RDWR()
+      CALL WVENVI%GET_HOST_DATA_RDWR()
+      CALL FF_NOW%GET_HOST_DATA_RDWR()
+      CALL FF_NEXT%GET_HOST_DATA_RDWR()
+      CALL WAM2NEMO%GET_HOST_DATA_RDWR()
+      CALL INTFLDS%GET_HOST_DATA_RDWR()
+      CALL VARS_4D%GET_HOST_DATA_RDWR()
+      CALL MIJ%GET_HOST_DATA_RDWR()
+      CALL BLK2GLO%GET_HOST_DATA_RDWR()
+
+      CALL WVPRPT_LAND%DELETE_DEVICE_DATA()
+      CALL WVPRPT%DELETE_DEVICE_DATA()
+      CALL WVENVI%DELETE_DEVICE_DATA()
+      CALL FF_NOW%DELETE_DEVICE_DATA()
+      CALL FF_NEXT%DELETE_DEVICE_DATA()
+      CALL WAM2NEMO%DELETE_DEVICE_DATA()
+      CALL INTFLDS%DELETE_DEVICE_DATA()
+      CALL VARS_4D%DELETE_DEVICE_DATA()
+      CALL MIJ%DELETE_DEVICE_DATA()
+      CALL BLK2GLO%DELETE_DEVICE_DATA()
+      IF (LHOOK) CALL DR_HOOK('DATA_OFFLOAD',1,ZHOOK_HANDLE_DATA_OFFLOAD)
+#endif
+      IF (LHOOK) CALL DR_HOOK('ADVECTION_LOOP',1,ZHOOK_HANDLE_ADVECTION_LOOP)
 
 IF (LHOOK) CALL DR_HOOK('WAMODEL',1,ZHOOK_HANDLE)
 

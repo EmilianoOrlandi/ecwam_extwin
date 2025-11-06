@@ -101,13 +101,16 @@
 
       SELECT CASE (IPHYS)
       CASE(0)
+!$loki remove
         CALL SINPUT_JAN (NGST, LLSNEG, KIJS, KIJL, FL1,  &
      &                   WAVNUM, CINV, XK2CG,            &
      &                   WSWAVE, UFRIC, Z0M,     &
      &                   COSWDIF, SINWDIF2,              & 
      &                   RAORW, WSTAR, RNFAC,            &
      &                   FLD, SL, SPOS, XLLWS)
+!$loki end remove
       CASE(1) 
+        !$loki inline
         CALL SINPUT_ARD (NGST, LLSNEG, KIJS, KIJL, FL1,  &
      &                   WAVNUM, CINV, XK2CG,            &
      &                   WDWAVE, WSWAVE, UFRIC, Z0M,     &
