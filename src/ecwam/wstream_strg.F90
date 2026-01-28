@@ -528,6 +528,12 @@
         MARSFCTYPE = 'fc'
         KSTREAM = 1248
         LASTREAM=.TRUE.
+      ELSE IF(ISTREAM.EQ.1259) THEN
+!       WAVE EXTENDING WINDOW FORECAST
+        CSTREAM = 'xwda'
+        MARSFCTYPE = 'fc'
+        KSTREAM = 1248
+        LASTREAM=.TRUE.
       ELSE IF(ISTREAM.EQ.1098) THEN
 !       WAVE DESTINE FORECAST
         CSTREAM = 'clte'
